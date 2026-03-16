@@ -1,4 +1,4 @@
-# @cypriot_unknown/apollo-hono
+# @cypriotunknown/apollo-hono
 
 Apollo Server integration for [Hono](https://hono.dev).
 
@@ -28,7 +28,7 @@ Features:
 
 **Bun**
 ```sh
-bun add @cypriot_unknown/apollo-hono @apollo/server graphql hono
+bun add @cypriotunknown/apollo-hono @apollo/server graphql hono
 # subscriptions only:
 bun add graphql-ws @graphql-tools/schema
 ```
@@ -52,7 +52,7 @@ bunx jsr add @cypriot/apollo-hono
 ```ts
 import { ApolloServer } from '@apollo/server';
 import { Hono } from 'hono';
-import { httpHandler } from '@cypriot_unknown/apollo-hono';
+import { httpHandler } from '@cypriotunknown/apollo-hono';
 
 const server = new ApolloServer({
   typeDefs: `type Query { hello: String }`,
@@ -73,7 +73,7 @@ export default { fetch: app.fetch };
 import { ApolloServer } from '@apollo/server';
 import type { BaseContext } from '@apollo/server';
 import { Hono } from 'hono';
-import { httpHandler } from '@cypriot_unknown/apollo-hono';
+import { httpHandler } from '@cypriotunknown/apollo-hono';
 
 interface MyContext extends BaseContext {
   token: string | undefined;
@@ -118,7 +118,7 @@ import { ApolloServer } from '@apollo/server';
 import { Hono } from 'hono';
 import { upgradeWebSocket, websocket } from 'hono/bun'; // swap for your runtime
 import { makeExecutableSchema } from '@graphql-tools/schema';
-import { httpHandler, wsHandler } from '@cypriot_unknown/apollo-hono';
+import { httpHandler, wsHandler } from '@cypriotunknown/apollo-hono';
 
 const typeDefs = `
   type User         { id: ID! name: String! }
