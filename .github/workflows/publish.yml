@@ -25,7 +25,7 @@ jobs:
         run: bun run build
 
       - name: Publish to npm
-        run: npm publish --provenance
+        run: npm publish --provenance --access public
 
       - name: Setup Node for GitHub Packages
         uses: actions/setup-node@v4
