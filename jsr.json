@@ -1,0 +1,12 @@
+{
+  "name": "@cypriot/apollo-hono",
+  "version": "0.1.1",
+  "license": "MIT",
+  "exports": "./mod.ts",
+  "exclude": [
+    "dist",
+    "node_modules",
+    "src/index.test.ts",
+    "tsconfig.build.json"
+  ]
+}
