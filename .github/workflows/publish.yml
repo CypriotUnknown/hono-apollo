@@ -33,7 +33,7 @@ jobs:
       - name: Publish to npm
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          if npm view @cypriot_unknown/apollo-hono@$VERSION version &>/dev/null; then
+          if npm view @cypriotunknown/apollo-hono@$VERSION version &>/dev/null; then
             echo "Version $VERSION already published to npm, skipping"
           else
             npm publish
@@ -47,7 +47,7 @@ jobs:
       - name: Publish to GitHub Packages
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          if npm view @cypriot_unknown/apollo-hono@$VERSION version --registry https://npm.pkg.github.com &>/dev/null; then
+          if npm view @cypriotunknown/apollo-hono@$VERSION version --registry https://npm.pkg.github.com &>/dev/null; then
             echo "Version $VERSION already published to GitHub Packages, skipping"
           else
             npm publish --registry https://npm.pkg.github.com
