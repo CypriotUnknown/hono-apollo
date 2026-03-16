@@ -24,8 +24,15 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Setup Node for npm
+        uses: actions/setup-node@v4
+        with:
+          registry-url: "https://registry.npmjs.org"
+
       - name: Publish to npm
-        run: npm publish --access public
+        run: |
+          npm config set //registry.npmjs.org/:_authToken ""
+          npm publish --access public
 
       - name: Setup Node for GitHub Packages
         uses: actions/setup-node@v4
