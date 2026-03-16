@@ -31,7 +31,7 @@ jobs:
 
       - name: Publish to npm
         run: |
-          npm config set //registry.npmjs.org/:_authToken ""
+          npm config delete //registry.npmjs.org/:_authToken
           npm publish --access public
 
       - name: Setup Node for GitHub Packages
