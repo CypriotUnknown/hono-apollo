@@ -54,3 +54,6 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to JSR
+        run: npx jsr publish

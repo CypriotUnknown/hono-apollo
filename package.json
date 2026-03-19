@@ -27,12 +27,8 @@
     "hono": "^4.0.0"
   },
   "devDependencies": {
-    "@apollo/server": "^5.4.0",
     "@apollo/server-integration-testsuite": "^5.4.0",
     "@types/bun": "latest",
-    "graphql": "^16.13.1",
-    "graphql-ws": "^6.0.7",
-    "hono": "^4.12.8",
     "typescript": "^5"
   },
   "keywords": [

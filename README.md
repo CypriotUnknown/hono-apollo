@@ -1,24 +1,27 @@
 # @cypriotunknown/apollo-hono
 
-Apollo Server integration for [Hono](https://hono.dev).
+Apollo Server integration for [Hono](https://hono.dev) (Bun runtime).
 
 Features:
+
 - Full HTTP support: queries, mutations, and `@defer` / `@stream` (chunked responses)
+- HTTP multipart subscriptions (`multipart/mixed; subscriptionSpec=1.0`) for Apollo iOS 2.x
 - WebSocket subscriptions with dual-protocol support:
-  - `graphql-transport-ws` (Apollo Client ≥ 3.5)
+  - `graphql-transport-ws` (Apollo Client >= 3.5)
   - `graphql-ws` / `subscriptions-transport-ws` (legacy clients)
+- Request/response body transforms — decrypt incoming bodies, encrypt outgoing responses
 - TypeScript-first with strict generics — your context type flows end-to-end
 
 ---
 
 ## Requirements
 
-| Peer dependency  | Version                      |
-|------------------|------------------------------|
-| `@apollo/server` | `^4.0.0 \|\| ^5.0.0`        |
-| `graphql`        | `^16.0.0`                    |
-| `graphql-ws`     | `^5.0.0 \|\| ^6.0.0` _(subscriptions only)_ |
-| `hono`           | `^4.0.0`                     |
+| Peer dependency  | Version                                              |
+|------------------|------------------------------------------------------|
+| `@apollo/server` | `^4.0.0 \|\| ^5.0.0`                                |
+| `graphql`        | `^16.0.0`                                            |
+| `graphql-ws`     | `^5.0.0 \|\| ^6.0.0` _(subscriptions only)_         |
+| `hono`           | `^4.0.0`                                             |
 
 > The WebSocket handler (`wsHandler`) is supported on **Bun, Cloudflare Workers, and Deno** via Hono's `upgradeWebSocket` helper. The HTTP handler (`httpHandler`) works on any Hono-compatible runtime.
 
@@ -26,7 +29,7 @@ Features:
 
 ## Installation
 
-**Bun**
+**npm / Bun**
 ```sh
 bun add @cypriotunknown/apollo-hono @apollo/server graphql hono
 # subscriptions only:
@@ -43,11 +46,13 @@ deno add jsr:@cypriot/apollo-hono
 bunx jsr add @cypriot/apollo-hono
 ```
 
+> **Local dev note:** `graphql` is a peer dependency of this package, so you do not need to add it to your `devDependencies` — it is already satisfied by the peer install. Adding it separately can cause multiple `graphql` instances and subtle runtime errors.
+
 ---
 
-## HTTP handler — queries & mutations
+## Quick start
 
-### Basic
+### Queries & mutations
 
 ```ts
 import { ApolloServer } from '@apollo/server';
@@ -62,7 +67,7 @@ await server.start();
 
 const app = new Hono();
 app.post('/graphql', httpHandler(server));
-app.get('/graphql',  httpHandler(server));
+app.get('/graphql',  httpHandler(server)); // Apollo Studio / landing page
 
 export default { fetch: app.fetch };
 ```
@@ -104,14 +109,13 @@ export default { fetch: app.fetch };
 
 ---
 
-## WebSocket handler — subscriptions
+## WebSocket subscriptions
 
-WebSocket support is available on **Bun, Cloudflare Workers, and Deno** via
-Hono's `upgradeWebSocket` helper. Pass the runtime-specific function in
-`options.upgradeWebSocket`.
+WebSocket support is available on **Bun, Cloudflare Workers, and Deno** via Hono's `upgradeWebSocket` helper. Pass the runtime-specific function in `options.upgradeWebSocket`.
 
-Use `makeExecutableSchema` from `@graphql-tools/schema` to build the schema
-explicitly — it must be passed to both `ApolloServer` and `wsHandler`.
+Use `makeExecutableSchema` from `@graphql-tools/schema` to build the schema explicitly — it must be passed to both `ApolloServer` and `wsHandler`.
+
+WebSocket upgrade requests arriving on the same route as `httpHandler` are automatically passed through to `wsHandler` (the HTTP handler calls `next()` when it detects an `Upgrade: websocket` header), so you can chain both on a single GET route.
 
 ```ts
 import { ApolloServer } from '@apollo/server';
@@ -127,7 +131,6 @@ const typeDefs = `
   type Subscription { userAdded: User! }
 `;
 
-// --- simple pub/sub ---
 import { EventEmitter } from 'node:events';
 const ee = new EventEmitter();
 const users: { id: string; name: string }[] = [];
@@ -166,9 +169,8 @@ const ws   = wsHandler(server, { schema, upgradeWebSocket });
 
 const app = new Hono();
 app.post('/graphql', http);
-app.get('/graphql', (c, next) =>
-  c.req.header('upgrade') === 'websocket' ? ws(c, next) : http(c, next),
-);
+// httpHandler passes WebSocket upgrades to next(); wsHandler picks them up.
+app.get('/graphql', http, ws);
 
 // Bun: export `websocket` alongside `fetch`
 export default { fetch: app.fetch, websocket };
@@ -188,34 +190,120 @@ bun --hot index.ts
 
 ---
 
+## HTTP multipart subscriptions (Apollo iOS 2.x)
+
+Apollo iOS 2.x uses the `multipart/mixed; subscriptionSpec=1.0` transport rather than WebSockets. Pass `schema` to `httpHandler` to enable this path — the handler will detect subscription operations and stream each event as a multipart chunk.
+
+Each chunk is wrapped per the spec: `{"payload": <execution result>}`.
+`onResponseBody` (if set) is applied to every chunk, so encryption is transparent.
+
+```ts
+import { makeExecutableSchema } from '@graphql-tools/schema';
+import { httpHandler } from '@cypriotunknown/apollo-hono';
+
+const schema = makeExecutableSchema({ typeDefs, resolvers });
+const server = new ApolloServer({ schema });
+await server.start();
+
+const app = new Hono();
+app.post('/graphql', httpHandler(server, { schema }));
+app.get('/graphql',  httpHandler(server, { schema }));
+```
+
+---
+
+## Encryption / body transforms
+
+`onRequestBody` and `onResponseBody` let you transparently encrypt and decrypt the HTTP transport without touching your resolvers.
+
+```ts
+import { httpHandler } from '@cypriotunknown/apollo-hono';
+
+app.post(
+  '/graphql',
+  httpHandler(server, {
+    onRequestBody: async (body, _honoCtx) => {
+      // body is the already-parsed JSON value from the client
+      return decrypt(body); // return the plaintext GraphQL request object
+    },
+    onResponseBody: async (body, _honoCtx) => {
+      // body is the parsed GraphQL response JSON
+      return encrypt(body); // return any JSON-serialisable value
+    },
+  }),
+);
+```
+
+- `onRequestBody` is called once per POST request, after JSON parsing, before Apollo executes.
+- `onResponseBody` is called for every response chunk — including `@defer` / `@stream` chunks and HTTP multipart subscription events.
+- Non-JSON bodies (e.g. Apollo's HTML landing page) are passed through unchanged.
+
+---
+
 ## API Reference
 
 ### `httpHandler(server, options?)`
 
-Creates a Hono middleware that handles GraphQL HTTP requests.
+Creates a Hono `MiddlewareHandler` that handles GraphQL HTTP requests (queries, mutations, `@defer`, `@stream`, and optionally HTTP multipart subscriptions).
 
-| Parameter         | Type                                                       | Required |
-|-------------------|------------------------------------------------------------|----------|
-| `server`          | `ApolloServer<TContext>`                                   | Yes      |
-| `options.context` | `ContextFunction<[HonoContextFunctionArgument], TContext>` | No       |
+GET requests are supported for Apollo Studio introspection and the landing page.
+WebSocket upgrade requests are passed through via `next()` so a chained `wsHandler` can handle them.
+
+| Parameter              | Type                                                                | Required |
+|------------------------|---------------------------------------------------------------------|----------|
+| `server`               | `ApolloServer<TContext>`                                            | Yes      |
+| `options.context`      | `ContextFunction<[HonoContextFunctionArgument], TContext>`          | No       |
+| `options.onRequestBody`  | `(body: any, honoCtx: Context) => Promise<any> \| any`            | No       |
+| `options.onResponseBody` | `(body: any, honoCtx: Context) => Promise<any> \| any`            | No       |
+| `options.schema`       | `GraphQLSchema`                                                     | No       |
+
+`options.schema` is required only when you need HTTP multipart subscription support (Apollo iOS 2.x).
+
+---
 
 ### `wsHandler(server, options)`
 
-Creates a Hono middleware that upgrades connections to WebSockets for GraphQL
-subscriptions. Supported on Bun, Cloudflare Workers, and Deno.
+Creates a Hono `MiddlewareHandler` that upgrades HTTP connections to WebSockets for GraphQL subscriptions. Supports both the modern `graphql-transport-ws` protocol and the legacy `graphql-ws` / `subscriptions-transport-ws` protocol.
 
-| Parameter                  | Type                                                       | Required |
-|----------------------------|------------------------------------------------------------|----------|
-| `server`                   | `ApolloServer<TContext>`                                   | Yes      |
-| `options.schema`           | `GraphQLSchema`                                            | Yes      |
-| `options.upgradeWebSocket` | `UpgradeWebSocket`                                         | Yes      |
-| `options.context`          | `ContextFunction<[HonoContextFunctionArgument], TContext>` | No       |
+| Parameter                    | Type                                                       | Required |
+|------------------------------|------------------------------------------------------------|----------|
+| `server`                     | `ApolloServer<TContext>`                                   | Yes      |
+| `options.schema`             | `GraphQLSchema`                                            | Yes      |
+| `options.upgradeWebSocket`   | `UpgradeWebSocket`                                         | Yes      |
+| `options.context`            | `ContextFunction<[HonoContextFunctionArgument], TContext>` | No       |
+
+---
 
 ### `HonoContextFunctionArgument`
 
 ```ts
 interface HonoContextFunctionArgument {
   honoCtx: Context; // Hono's Context object
+}
+```
+
+---
+
+### `HonoMiddlewareOptions<TContext>`
+
+```ts
+interface HonoMiddlewareOptions<TContext extends BaseContext> {
+  context?:         ContextFunction<[HonoContextFunctionArgument], TContext>;
+  onRequestBody?:   (body: any, honoCtx: Context) => Promise<any> | any;
+  onResponseBody?:  (body: any, honoCtx: Context) => Promise<any> | any;
+  schema?:          GraphQLSchema;
+}
+```
+
+---
+
+### `HonoWsHandlerOptions<TContext>`
+
+```ts
+interface HonoWsHandlerOptions<TContext extends BaseContext> {
+  schema:             GraphQLSchema;
+  upgradeWebSocket:   UpgradeWebSocket;
+  context?:           ContextFunction<[HonoContextFunctionArgument], TContext>;
 }
 ```
 
