@@ -56,4 +56,10 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to JSR
-        run: npx jsr publish --allow-dirty
+        run: |
+          VERSION=$(node -p "require('./jsr.json').version")
+          if curl -sf "https://api.jsr.io/scopes/cypriot/packages/apollo-hono/versions/$VERSION" > /dev/null; then
+            echo "Version $VERSION already published to JSR, skipping"
+          else
+            npx jsr publish --allow-dirty
+          fi
