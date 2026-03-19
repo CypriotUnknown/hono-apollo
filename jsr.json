@@ -4,11 +4,11 @@
   "license": "MIT",
   "exports": "./mod.ts",
   "imports": {
-    "@apollo/server": "npm:@apollo/server@*",
-    "graphql": "npm:graphql@*",
-    "graphql-ws": "npm:graphql-ws@*",
-    "hono": "npm:hono@*",
-    "hono/ws": "npm:hono@*/ws"
+    "@apollo/server": "npm:@apollo/server@^5.0.0",
+    "graphql": "npm:graphql@^16.0.0",
+    "graphql-ws": "npm:graphql-ws@^6.0.0",
+    "hono": "npm:hono@^4.0.0",
+    "hono/ws": "npm:hono@^4.0.0/ws"
   },
   "exclude": [
     ".github",
