@@ -1,4 +1,4 @@
-# @cypriotunknown/apollo-hono
+# @cypriot/apollo-hono
 
 Apollo Server integration for [Hono](https://hono.dev) (Bun runtime).
 
@@ -18,9 +18,9 @@ Features:
 
 | Peer dependency  | Version                                              |
 |------------------|------------------------------------------------------|
-| `@apollo/server` | `^4.0.0 \|\| ^5.0.0`                                |
+| `@apollo/server` | `^5.0.0`                                             |
 | `graphql`        | `^16.0.0`                                            |
-| `graphql-ws`     | `^5.0.0 \|\| ^6.0.0` _(subscriptions only)_         |
+| `graphql-ws`     | `^6.0.0` _(subscriptions only)_                      |
 | `hono`           | `^4.0.0`                                             |
 
 > The WebSocket handler (`wsHandler`) is supported on **Bun, Cloudflare Workers, and Deno** via Hono's `upgradeWebSocket` helper. The HTTP handler (`httpHandler`) works on any Hono-compatible runtime.
@@ -29,9 +29,10 @@ Features:
 
 ## Installation
 
-**npm / Bun**
+**JSR** — import as `@cypriot/apollo-hono`
 ```sh
-bun add @cypriotunknown/apollo-hono @apollo/server graphql hono
+bunx jsr add @cypriot/apollo-hono
+bun add @apollo/server graphql hono
 # subscriptions only:
 bun add graphql-ws @graphql-tools/schema
 ```
@@ -41,9 +42,9 @@ bun add graphql-ws @graphql-tools/schema
 deno add jsr:@cypriot/apollo-hono
 ```
 
-**JSR (Bun)**
+**npm** — import as `@cypriotunknown/apollo-hono`
 ```sh
-bunx jsr add @cypriot/apollo-hono
+npm i @cypriotunknown/apollo-hono @apollo/server graphql hono
 ```
 
 > **Local dev note:** `graphql` is a peer dependency of this package, so you do not need to add it to your `devDependencies` — it is already satisfied by the peer install. Adding it separately can cause multiple `graphql` instances and subtle runtime errors.
@@ -57,7 +58,7 @@ bunx jsr add @cypriot/apollo-hono
 ```ts
 import { ApolloServer } from '@apollo/server';
 import { Hono } from 'hono';
-import { httpHandler } from '@cypriotunknown/apollo-hono';
+import { httpHandler } from '@cypriot/apollo-hono';
 
 const server = new ApolloServer({
   typeDefs: `type Query { hello: String }`,
@@ -78,7 +79,7 @@ export default { fetch: app.fetch };
 import { ApolloServer } from '@apollo/server';
 import type { BaseContext } from '@apollo/server';
 import { Hono } from 'hono';
-import { httpHandler } from '@cypriotunknown/apollo-hono';
+import { httpHandler } from '@cypriot/apollo-hono';
 
 interface MyContext extends BaseContext {
   token: string | undefined;
@@ -122,7 +123,7 @@ import { ApolloServer } from '@apollo/server';
 import { Hono } from 'hono';
 import { upgradeWebSocket, websocket } from 'hono/bun'; // swap for your runtime
 import { makeExecutableSchema } from '@graphql-tools/schema';
-import { httpHandler, wsHandler } from '@cypriotunknown/apollo-hono';
+import { httpHandler, wsHandler } from '@cypriot/apollo-hono';
 
 const typeDefs = `
   type User         { id: ID! name: String! }
@@ -199,7 +200,7 @@ Each chunk is wrapped per the spec: `{"payload": <execution result>}`.
 
 ```ts
 import { makeExecutableSchema } from '@graphql-tools/schema';
-import { httpHandler } from '@cypriotunknown/apollo-hono';
+import { httpHandler } from '@cypriot/apollo-hono';
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 const server = new ApolloServer({ schema });
@@ -217,7 +218,7 @@ app.get('/graphql',  httpHandler(server, { schema }));
 `onRequestBody` and `onResponseBody` let you transparently encrypt and decrypt the HTTP transport without touching your resolvers.
 
 ```ts
-import { httpHandler } from '@cypriotunknown/apollo-hono';
+import { httpHandler } from '@cypriot/apollo-hono';
 
 app.post(
   '/graphql',
