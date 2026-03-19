@@ -10,9 +10,9 @@
         "typescript": "^5",
       },
       "peerDependencies": {
-        "@apollo/server": "^4.0.0 || ^5.0.0",
+        "@apollo/server": "^5.0.0",
         "graphql": "^16.0.0",
-        "graphql-ws": "^5.0.0 || ^6.0.0",
+        "graphql-ws": "^6.0.0",
         "hono": "^4.0.0",
       },
     },
