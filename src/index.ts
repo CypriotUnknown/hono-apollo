@@ -348,12 +348,14 @@ export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
                         start(controller) {
                             (async () => {
                                 try {
-                                    // Send an initial padded boundary to open the first part.
-                                    // The padding forces URLSession (iOS) to begin delivering
-                                    // bytes immediately instead of waiting for its internal
-                                    // buffer (~16 KB) to fill.
+                                    // Send an initial heartbeat part with padding to force
+                                    // URLSession (iOS) to begin delivering bytes immediately
+                                    // instead of waiting for its internal buffer to fill.
+                                    // The empty payload {} is ignored by Apollo iOS.
                                     const padding = ' '.repeat(16 * 1024);
-                                    controller.enqueue(encoder.encode(`${padding}\r\n--${boundary}\r\n`));
+                                    controller.enqueue(encoder.encode(
+                                        `--${boundary}\r\nContent-Type: application/json\r\n\r\n{}${padding}\r\n--${boundary}\r\n`
+                                    ));
 
                                     for await (const value of subscribeResult) {
                                         if (cancelled) break;
