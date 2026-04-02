@@ -348,8 +348,12 @@ export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
                         start(controller) {
                             (async () => {
                                 try {
-                                    // Send the initial boundary to open the first part.
-                                    controller.enqueue(encoder.encode(`--${boundary}\r\n`));
+                                    // Send an initial padded boundary to open the first part.
+                                    // The padding forces URLSession (iOS) to begin delivering
+                                    // bytes immediately instead of waiting for its internal
+                                    // buffer (~16 KB) to fill.
+                                    const padding = ' '.repeat(16 * 1024);
+                                    controller.enqueue(encoder.encode(`${padding}\r\n--${boundary}\r\n`));
 
                                     for await (const value of subscribeResult) {
                                         if (cancelled) break;
