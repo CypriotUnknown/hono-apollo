@@ -1,31 +1,59 @@
 import type { ApolloServer, BaseContext, ContextFunction, HTTPGraphQLRequest } from '@apollo/server';
 import { HeaderMap } from '@apollo/server';
-import { execute, subscribe, parse, getOperationAST, type GraphQLSchema } from 'graphql';
-import { makeServer, handleProtocols } from 'graphql-ws';
-import type { Context, MiddlewareHandler } from 'hono';
+import { execute, subscribe, parse, getOperationAST, type ExecutionResult, type GraphQLSchema } from 'graphql';
+import { makeServer, handleProtocols, type Server } from 'graphql-ws';
+import type { Context, Env, MiddlewareHandler } from 'hono';
 import type { UpgradeWebSocket } from 'hono/ws';
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/** Runtime guard: value is a plain object indexable as `Record<string, unknown>`. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Runtime guard: discriminates `subscribe()` results into async iterator vs error. */
+function isAsyncIterable(
+    value: AsyncGenerator<ExecutionResult> | ExecutionResult,
+): value is AsyncGenerator<ExecutionResult> {
+    return Symbol.asyncIterator in value;
+}
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
-/** Argument passed to your context function for both HTTP and WS handlers. */
-export interface HonoContextFunctionArgument {
-    honoCtx: Context;
+/**
+ * Argument passed to your context function for both HTTP and WS handlers.
+ *
+ * The `E` generic flows through from the handler options so that `honoCtx`
+ * carries your application's typed variables and bindings.
+ */
+export interface HonoContextFunctionArgument<E extends Env = Env> {
+    honoCtx: Context<E>;
 }
 
-/** Options accepted by `httpHandler`. */
-export interface HonoMiddlewareOptions<TContext extends BaseContext> {
+/**
+ * Options accepted by `httpHandler`.
+ *
+ * @typeParam TContext - The GraphQL context type for `ApolloServer<TContext>`.
+ * @typeParam E       - The Hono `Env` type, giving the hooks and context
+ *                      function access to typed `c.get()` / `c.set()` variables.
+ */
+export interface HonoMiddlewareOptions<TContext extends BaseContext, E extends Env = Env> {
     /**
      * A function that builds the GraphQL context value for every request.
      * Receives the Hono `Context` object so you can read headers, cookies, etc.
      * Defaults to returning an empty object `{}`.
      */
-    context?: ContextFunction<[HonoContextFunctionArgument], TContext>;
+    context?: ContextFunction<[HonoContextFunctionArgument<E>], TContext>;
     /**
      * Transform the **incoming** request body before Apollo Server processes it.
-     * Called with the already-parsed JSON value (typed `any`, matching
-     * `c.req.json()`) — use this to decrypt an encrypted body.
+     * Called with the already-parsed JSON value — use this to decrypt an
+     * encrypted body. The value is typed `unknown`; validate before using
+     * (e.g. with Zod).
      *
      * Must return the plaintext GraphQL request object
      * (e.g. `{ query, variables, operationName }`).
@@ -34,12 +62,12 @@ export interface HonoMiddlewareOptions<TContext extends BaseContext> {
      * @param honoCtx  - The Hono `Context`, e.g. to read request headers.
      * @returns The GraphQL request object for Apollo to execute.
      */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    onRequestBody?: (body: any, honoCtx: Context) => Promise<any> | any;
+    onRequestBody?: (body: unknown, honoCtx: Context<E>) => Promise<unknown> | unknown;
     /**
      * Transform the **outgoing** response body before it is sent to the client.
-     * Called with the parsed GraphQL JSON value (typed `any`) produced by
-     * Apollo — use this to encrypt the response.
+     * Called with the parsed GraphQL JSON value produced by Apollo — use this
+     * to encrypt the response. The value is typed `unknown`; validate before
+     * using (e.g. with Zod).
      *
      * The return value is JSON-serialised and sent as the response body.
      * For chunked responses (`@defer` / `@stream` / subscriptions) this is
@@ -49,8 +77,7 @@ export interface HonoMiddlewareOptions<TContext extends BaseContext> {
      * @param honoCtx  - The Hono `Context`, e.g. to read request headers.
      * @returns Any JSON-serialisable value to send to the client.
      */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    onResponseBody?: (body: any, honoCtx: Context) => Promise<any> | any;
+    onResponseBody?: (body: unknown, honoCtx: Context<E>) => Promise<unknown> | unknown;
     /**
      * The GraphQL schema. Required for subscription support over HTTP multipart
      * (`multipart/mixed; subscriptionSpec=1.0`), which is the transport used by
@@ -113,16 +140,20 @@ interface WsSocket {
     onMessage: (cb: (data: string) => Promise<void>) => void;
 }
 
+/** Extra context attached to each WebSocket connection for graphql-ws. */
+type WsExtra = { honoCtx: Context };
+
 function makeLegacyServer<TContext>(
     schema: GraphQLSchema,
     contextFn: (extra: HonoContextFunctionArgument) => Promise<TContext>,
 ) {
     return {
         opened(socket: WsSocket, extra: HonoContextFunctionArgument): () => Promise<void> {
-            const subscriptions = new Map<string, AsyncIterableIterator<unknown>>();
+            const subscriptions = new Map<string, AsyncGenerator<ExecutionResult>>();
 
             socket.onMessage(async (data) => {
-                const message = JSON.parse(data);
+                const message: unknown = JSON.parse(data);
+                if (!isRecord(message)) return;
 
                 switch (message.type) {
                     case 'connection_init':
@@ -130,42 +161,46 @@ function makeLegacyServer<TContext>(
                         break;
 
                     case 'start': {
-                        const { id, payload } = message;
+                        const id = message.id;
+                        if (typeof id !== 'string') return;
+                        if (!isRecord(message.payload)) return;
+
+                        const payload = message.payload;
+                        if (typeof payload.query !== 'string') return;
+
                         const document = parse(payload.query);
                         const ctx = await contextFn(extra);
 
                         const isSubscription = document.definitions.some(
-                            (def) =>
-                                def.kind === 'OperationDefinition' &&
-                                (def as { operation: string }).operation === 'subscription',
+                            (def) => def.kind === 'OperationDefinition' && def.operation === 'subscription',
                         );
+
+                        const variableValues = isRecord(payload.variables) ? payload.variables : undefined;
+                        const operationName = typeof payload.operationName === 'string'
+                            ? payload.operationName
+                            : undefined;
 
                         if (isSubscription) {
                             const result = await subscribe({
                                 schema,
                                 document,
-                                variableValues: payload.variables,
-                                operationName: payload.operationName,
+                                variableValues,
+                                operationName,
                                 contextValue: ctx,
                             });
 
-                            if (!(Symbol.asyncIterator in Object(result))) {
+                            if (!isAsyncIterable(result)) {
                                 socket.send(
-                                    JSON.stringify({
-                                        type: 'error',
-                                        id,
-                                        payload: (result as { errors: unknown }).errors,
-                                    }),
+                                    JSON.stringify({ type: 'error', id, payload: result.errors }),
                                 );
                                 return;
                             }
 
-                            const iterator = result as AsyncIterableIterator<unknown>;
-                            subscriptions.set(id, iterator);
+                            subscriptions.set(id, result);
 
                             (async () => {
                                 try {
-                                    for await (const event of iterator) {
+                                    for await (const event of result) {
                                         if (!subscriptions.has(id)) break;
                                         socket.send(JSON.stringify({ type: 'data', id, payload: event }));
                                     }
@@ -178,8 +213,8 @@ function makeLegacyServer<TContext>(
                             const result = await execute({
                                 schema,
                                 document,
-                                variableValues: payload.variables,
-                                operationName: payload.operationName,
+                                variableValues,
+                                operationName,
                                 contextValue: ctx,
                             });
                             socket.send(JSON.stringify({ type: 'data', id, payload: result }));
@@ -189,9 +224,10 @@ function makeLegacyServer<TContext>(
                     }
 
                     case 'stop': {
+                        if (typeof message.id !== 'string') return;
                         const sub = subscriptions.get(message.id);
                         if (sub) {
-                            await sub.return?.();
+                            await sub.return(undefined);
                             subscriptions.delete(message.id);
                         }
                         break;
@@ -205,7 +241,7 @@ function makeLegacyServer<TContext>(
 
             return async () => {
                 for (const [, iterator] of subscriptions) {
-                    await iterator.return?.();
+                    await iterator.return(undefined);
                 }
                 subscriptions.clear();
             };
@@ -230,19 +266,24 @@ export function httpHandler(
 /**
  * Overload with a context function — the generic `TContext` is inferred from
  * the `context` option so that `ApolloServer<TContext>` stays consistent.
+ *
+ * The `E` generic lets hooks and context functions receive a typed Hono
+ * `Context<E>` with access to your application's variables and bindings.
  */
-export function httpHandler<TContext extends BaseContext>(
+export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
     server: ApolloServer<TContext>,
-    options: HonoMiddlewareOptions<TContext> & Required<Pick<HonoMiddlewareOptions<TContext>, 'context'>>,
+    options: HonoMiddlewareOptions<TContext, E> & Required<Pick<HonoMiddlewareOptions<TContext, E>, 'context'>>,
 ): MiddlewareHandler;
-export function httpHandler<TContext extends BaseContext>(
+export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
     server: ApolloServer<TContext>,
-    options?: HonoMiddlewareOptions<TContext>,
+    options?: HonoMiddlewareOptions<TContext, E>,
 ): MiddlewareHandler {
     server.assertStarted('httpHandler()');
 
+    // When options.context is undefined the first overload constrains
+    // TContext = BaseContext, so defaultContext satisfies the return type.
     const contextFn = (options?.context ?? defaultContext) as ContextFunction<
-        [HonoContextFunctionArgument],
+        [HonoContextFunctionArgument<E>],
         TContext
     >;
 
@@ -274,48 +315,54 @@ export function httpHandler<TContext extends BaseContext>(
         }
 
         // Subscription over HTTP multipart — used by Apollo iOS 2.x.
-        // Detect a subscription operation by parsing the query (AST-only, safe
-        // across graphql module instances), then delegate execution to the
-        // caller-supplied `onSubscription` so there is no graphql realm conflict.
-        if (options?.schema) {
-            const bodyObj = body as Record<string, unknown> | null;
-            const queryStr = typeof bodyObj?.query === 'string' ? bodyObj.query : null;
+        // Detect a subscription by parsing the query AST, then stream events
+        // as multipart/mixed chunks with optional response transformation.
+        if (options?.schema && isRecord(body)) {
+            const queryStr = typeof body.query === 'string' ? body.query : null;
             if (queryStr) {
-                const opDef = getOperationAST(parse(queryStr), bodyObj?.operationName as string ?? null);
+                const opName = typeof body.operationName === 'string' ? body.operationName : undefined;
+                const opDef = getOperationAST(parse(queryStr), opName ?? null);
                 if (opDef?.operation === 'subscription') {
+                    const variables = isRecord(body.variables) ? body.variables : undefined;
                     const subscribeResult = await subscribe({
                         schema: options.schema,
                         document: parse(queryStr),
-                        variableValues: bodyObj?.variables as Record<string, unknown> | undefined,
-                        operationName: bodyObj?.operationName as string | undefined,
+                        variableValues: variables,
+                        operationName: opName,
                     });
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const iterator = subscribeResult as AsyncIterableIterator<any>;
+
+                    if (!isAsyncIterable(subscribeResult)) {
+                        return new Response(
+                            JSON.stringify(subscribeResult),
+                            { status: 400, headers: { 'content-type': 'application/json' } },
+                        );
+                    }
+
                     const boundary = 'graphql';
                     const encoder = new TextEncoder();
 
                     const readable = new ReadableStream({
                         async pull(controller) {
-                            const { value, done } = await iterator.next();
+                            const { value, done } = await subscribeResult.next();
                             if (done) {
                                 controller.enqueue(encoder.encode(`--${boundary}--\r\n`));
                                 controller.close();
                             } else {
-                                // subscriptionSpec=1.0 requires each event wrapped in {"payload": <execution result>}
+                                // subscriptionSpec=1.0 requires each event wrapped in {"payload": <result>}
                                 const envelope = { payload: value };
-                                let chunkBody = JSON.stringify(envelope);
+                                let chunkBody: string;
                                 if (options.onResponseBody) {
-                                    try {
-                                        const transformed = await options.onResponseBody(JSON.parse(chunkBody), c);
-                                        chunkBody = JSON.stringify(transformed);
-                                    } catch { /* non-JSON chunk — pass through */ }
+                                    const transformed = await options.onResponseBody(envelope, c);
+                                    chunkBody = JSON.stringify(transformed);
+                                } else {
+                                    chunkBody = JSON.stringify(envelope);
                                 }
                                 const part = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${chunkBody}\r\n`;
                                 controller.enqueue(encoder.encode(part));
                             }
                         },
                         cancel() {
-                            iterator.return?.();
+                            void subscribeResult.return(undefined);
                         },
                     });
 
@@ -347,11 +394,12 @@ export function httpHandler<TContext extends BaseContext>(
         });
 
         // Helper: parse, transform, re-serialise a response body string.
-        // Non-JSON bodies (e.g. Apollo's HTML landing page) are passed through unchanged.
+        // Non-JSON bodies (e.g. Apollo's HTML landing page) pass through unchanged.
         const applyResponseTransform = async (bodyString: string): Promise<string> => {
             if (!options?.onResponseBody) return bodyString;
             try {
-                const transformed = await options.onResponseBody(JSON.parse(bodyString), c);
+                const parsed: unknown = JSON.parse(bodyString);
+                const transformed = await options.onResponseBody(parsed, c);
                 return JSON.stringify(transformed);
             } catch {
                 return bodyString;
@@ -375,16 +423,7 @@ export function httpHandler<TContext extends BaseContext>(
                 if (done) {
                     controller.close();
                 } else {
-                    // Each chunk is a complete multipart/mixed part string.
-                    // Try to transform it; non-JSON boundary lines pass through.
-                    let chunk = value;
-                    if (options?.onResponseBody) {
-                        try {
-                            chunk = await applyResponseTransform(value);
-                        } catch {
-                            // Not a JSON chunk (e.g. boundary markers) — pass through.
-                        }
-                    }
+                    const chunk = await applyResponseTransform(value);
                     controller.enqueue(encoder.encode(chunk));
                 }
             },
@@ -409,7 +448,7 @@ export function httpHandler<TContext extends BaseContext>(
  * GraphQL subscriptions.
  *
  * Supports both the modern `graphql-transport-ws` protocol (used by Apollo
- * Client ≥ 3.5) and the legacy `graphql-ws` / `subscriptions-transport-ws`
+ * Client >= 3.5) and the legacy `graphql-ws` / `subscriptions-transport-ws`
  * protocol.
  *
  * Supports Bun, Cloudflare Workers, and Deno via Hono's `upgradeWebSocket`
@@ -427,13 +466,14 @@ export function wsHandler<TContext extends BaseContext>(
     server.assertStarted('wsHandler()');
 
     const { schema, upgradeWebSocket } = options;
+    // Same overload reasoning as httpHandler: safe when context is absent.
     const contextFn = (options.context ?? defaultContext) as ContextFunction<
         [HonoContextFunctionArgument],
         TContext
     >;
 
     // Lazily initialised — only created on the first connection that needs each protocol.
-    let newProtocolServer: ReturnType<typeof makeServer> | null = null;
+    let newProtocolServer: Server<WsExtra> | null = null;
     let legacyProtocolServer: ReturnType<typeof makeLegacyServer> | null = null;
 
     return upgradeWebSocket((c) => {
@@ -460,14 +500,11 @@ export function wsHandler<TContext extends BaseContext>(
                 socket.close = (code, reason) => ws.close(code, reason);
 
                 if (protocol === 'graphql-transport-ws') {
-                    newProtocolServer ??= makeServer({
+                    newProtocolServer ??= makeServer<Record<string, unknown> | undefined, WsExtra>({
                         schema,
                         execute,
                         subscribe,
-                        context: (ctx) => {
-                            const { honoCtx } = ctx.extra as { honoCtx: Context };
-                            return contextFn({ honoCtx });
-                        },
+                        context: (ctx) => contextFn({ honoCtx: ctx.extra.honoCtx }),
                     });
                     closeConnection = newProtocolServer.opened(
                         {
