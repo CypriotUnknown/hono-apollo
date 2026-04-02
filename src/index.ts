@@ -343,15 +343,13 @@ export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
                     const boundary = 'graphql';
                     const encoder = new TextEncoder();
 
+                    let cancelled = false;
                     const readable = new ReadableStream({
                         start(controller) {
-                            // Push-based: drive the async iterator in a detached loop
-                            // so chunks are enqueued (and flushed) as soon as the
-                            // server produces them, avoiding pull-based buffering
-                            // delays that cause the client to wait for multiple chunks.
                             (async () => {
                                 try {
                                     for await (const value of subscribeResult) {
+                                        if (cancelled) break;
                                         const envelope = { payload: value };
                                         let chunkBody: string;
                                         if (options.onResponseBody) {
@@ -363,14 +361,15 @@ export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
                                         const part = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${chunkBody}\r\n`;
                                         controller.enqueue(encoder.encode(part));
                                     }
+                                } catch { /* stream cancelled or iterator threw */ }
+                                if (!cancelled) {
                                     controller.enqueue(encoder.encode(`--${boundary}--\r\n`));
-                                    controller.close();
-                                } catch {
                                     controller.close();
                                 }
                             })();
                         },
                         cancel() {
+                            cancelled = true;
                             void subscribeResult.return(undefined);
                         },
                     });
