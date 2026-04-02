@@ -324,11 +324,13 @@ export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
                 const opDef = getOperationAST(parse(queryStr), opName ?? null);
                 if (opDef?.operation === 'subscription') {
                     const variables = isRecord(body.variables) ? body.variables : undefined;
+                    const contextValue = await contextFn({ honoCtx: c });
                     const subscribeResult = await subscribe({
                         schema: options.schema,
                         document: parse(queryStr),
                         variableValues: variables,
                         operationName: opName,
+                        contextValue,
                     });
 
                     if (!isAsyncIterable(subscribeResult)) {
