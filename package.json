@@ -1,6 +1,6 @@
 {
   "name": "@cypriotunknown/apollo-hono",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Apollo Server integration for Hono (Bun runtime)",
   "type": "module",
   "main": "./dist/index.js",
