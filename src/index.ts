@@ -346,10 +346,12 @@ export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
                     let cancelled = false;
                     const readable = new ReadableStream({
                         start(controller) {
-                            // Send a preamble immediately to flush the connection
-                            // through proxies and URLSession buffers, so the client
-                            // doesn't stall waiting for the first real chunk.
-                            controller.enqueue(encoder.encode(`\r\n`));
+                            // Send an empty multipart part immediately to flush the
+                            // connection through proxies and URLSession buffers.
+                            // Apollo iOS ignores parts without valid JSON payloads.
+                            controller.enqueue(encoder.encode(
+                                `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n{}\r\n`
+                            ));
 
                             (async () => {
                                 try {
