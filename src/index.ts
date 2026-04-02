@@ -344,24 +344,31 @@ export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
                     const encoder = new TextEncoder();
 
                     const readable = new ReadableStream({
-                        async pull(controller) {
-                            const { value, done } = await subscribeResult.next();
-                            if (done) {
-                                controller.enqueue(encoder.encode(`--${boundary}--\r\n`));
-                                controller.close();
-                            } else {
-                                // subscriptionSpec=1.0 requires each event wrapped in {"payload": <result>}
-                                const envelope = { payload: value };
-                                let chunkBody: string;
-                                if (options.onResponseBody) {
-                                    const transformed = await options.onResponseBody(envelope, c);
-                                    chunkBody = JSON.stringify(transformed);
-                                } else {
-                                    chunkBody = JSON.stringify(envelope);
+                        start(controller) {
+                            // Push-based: drive the async iterator in a detached loop
+                            // so chunks are enqueued (and flushed) as soon as the
+                            // server produces them, avoiding pull-based buffering
+                            // delays that cause the client to wait for multiple chunks.
+                            (async () => {
+                                try {
+                                    for await (const value of subscribeResult) {
+                                        const envelope = { payload: value };
+                                        let chunkBody: string;
+                                        if (options.onResponseBody) {
+                                            const transformed = await options.onResponseBody(envelope, c);
+                                            chunkBody = JSON.stringify(transformed);
+                                        } else {
+                                            chunkBody = JSON.stringify(envelope);
+                                        }
+                                        const part = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${chunkBody}\r\n`;
+                                        controller.enqueue(encoder.encode(part));
+                                    }
+                                    controller.enqueue(encoder.encode(`--${boundary}--\r\n`));
+                                    controller.close();
+                                } catch {
+                                    controller.close();
                                 }
-                                const part = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${chunkBody}\r\n`;
-                                controller.enqueue(encoder.encode(part));
-                            }
+                            })();
                         },
                         cancel() {
                             void subscribeResult.return(undefined);
