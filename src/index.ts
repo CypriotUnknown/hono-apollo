@@ -346,15 +346,11 @@ export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
                     let cancelled = false;
                     const readable = new ReadableStream({
                         start(controller) {
-                            // Send an empty multipart part immediately to flush the
-                            // connection through proxies and URLSession buffers.
-                            // Apollo iOS ignores parts without valid JSON payloads.
-                            controller.enqueue(encoder.encode(
-                                `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n{}\r\n`
-                            ));
-
                             (async () => {
                                 try {
+                                    // Send the initial boundary to open the first part.
+                                    controller.enqueue(encoder.encode(`--${boundary}\r\n`));
+
                                     for await (const value of subscribeResult) {
                                         if (cancelled) break;
                                         const envelope = { payload: value };
@@ -365,12 +361,15 @@ export function httpHandler<TContext extends BaseContext, E extends Env = Env>(
                                         } else {
                                             chunkBody = JSON.stringify(envelope);
                                         }
-                                        const part = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${chunkBody}\r\n`;
+                                        // Send headers, body, AND the closing boundary together
+                                        // so the client's multipart parser knows the part is
+                                        // complete without waiting for the next yield.
+                                        const part = `Content-Type: application/json\r\n\r\n${chunkBody}\r\n--${boundary}\r\n`;
                                         controller.enqueue(encoder.encode(part));
                                     }
                                 } catch { /* stream cancelled or iterator threw */ }
                                 if (!cancelled) {
-                                    controller.enqueue(encoder.encode(`--${boundary}--\r\n`));
+                                    controller.enqueue(encoder.encode(`--\r\n`));
                                     controller.close();
                                 }
                             })();
